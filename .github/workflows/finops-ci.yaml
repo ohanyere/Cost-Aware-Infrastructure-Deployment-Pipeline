@@ -1,0 +1,103 @@
+name: FinOps Cost Guardrail
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  COST_THRESHOLD_USD: "50"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  cost-guardrail:
+    name: Terraform plan and Infracost guardrail
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+
+      - name: Ensure jq is installed
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+          jq --version
+
+      - name: Terraform init
+        working-directory: infra
+        run: terraform init
+
+      - name: Terraform validate
+        working-directory: infra
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: infra
+        run: terraform plan -out tfplan.binary -var-file=envs/dev.tfvars
+
+      - name: Export Terraform plan JSON
+        working-directory: infra
+        run: terraform show -json tfplan.binary > plan.json
+
+      - name: Infracost diff JSON
+        run: |
+          infracost diff \
+            --path . \
+            --compare-to "https://github.com/${{ github.repository }}?ref=main" \
+            --format json \
+            --out-file infracost.json
+
+      - name: Infracost table summary
+        run: |
+          infracost diff \
+            --path . \
+            --compare-to "https://github.com/${{ github.repository }}?ref=main" \
+            --format table \
+            --out-file infracost.txt
+
+      - name: Comment Infracost summary on PR
+        if: github.event_name == 'pull_request'
+        run: |
+          infracost comment github \
+            --path infracost.json \
+            --repo "${{ github.repository }}" \
+            --pull-request "${{ github.event.pull_request.number }}" \
+            --github-token "${{ github.token }}" \
+            --behavior update
+
+      - name: Enforce monthly cost threshold
+        run: |
+          total_diff="$(jq '[.projects[]?.diff.totalMonthlyCost // "0" | tonumber] | add // 0' infracost.json)"
+
+          echo "Monthly cost diff: \$${total_diff}"
+          echo "Allowed monthly increase: \$${COST_THRESHOLD_USD}"
+
+          awk -v diff="${total_diff}" -v threshold="${COST_THRESHOLD_USD}" '
+            BEGIN {
+              if (diff > threshold) {
+                printf "Cost guardrail failed: monthly increase %.2f exceeds threshold %.2f\n", diff, threshold
+                exit 1
+              }
+
+              printf "Cost guardrail passed: monthly increase %.2f is within threshold %.2f\n", diff, threshold
+            }
+          '

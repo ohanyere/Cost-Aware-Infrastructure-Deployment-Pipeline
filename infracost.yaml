@@ -1,0 +1,7 @@
+version: 0.1
+
+projects:
+  - path: infra
+    name: cost-aware-infra
+    terraform_var_files:
+      - envs/dev.tfvars

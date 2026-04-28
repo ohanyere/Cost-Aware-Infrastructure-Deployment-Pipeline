@@ -1,0 +1,12 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.binary
+plan.json
+plan-*.json
+infracost.json
+infracost-*.json
+.infracost/
+.DS_Store
+.codex
