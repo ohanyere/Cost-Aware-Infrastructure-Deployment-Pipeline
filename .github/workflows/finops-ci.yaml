@@ -58,21 +58,20 @@ jobs:
         working-directory: infra
         run: terraform show -json tfplan.binary > plan.json
 
-      - name: Infracost diff JSON
+      - name: Infracost breakdown JSON
         run: |
-          infracost diff \
+          # TODO: Use infracost diff --compare-to after baseline cost artifacts are available on main.
+          infracost breakdown \
             --path . \
-            --compare-to "https://github.com/${{ github.repository }}?ref=main" \
             --format json \
             --out-file infracost.json
 
-      - name: Infracost table summary
+      - name: Infracost breakdown table summary
         run: |
-          infracost diff \
+          infracost breakdown \
             --path . \
-            --compare-to "https://github.com/${{ github.repository }}?ref=main" \
             --format table \
-            --out-file infracost.txt
+            --out-file infracost-table.txt
 
       - name: Comment Infracost summary on PR
         if: github.event_name == 'pull_request'
@@ -86,18 +85,18 @@ jobs:
 
       - name: Enforce monthly cost threshold
         run: |
-          total_diff="$(jq '[.projects[]?.diff.totalMonthlyCost // "0" | tonumber] | add // 0' infracost.json)"
+          estimated_monthly_cost="$(jq '[.projects[]?.breakdown.totalMonthlyCost // "0" | tonumber] | add // 0' infracost.json)"
 
-          echo "Monthly cost diff: \$${total_diff}"
-          echo "Allowed monthly increase: \$${COST_THRESHOLD_USD}"
+          echo "Estimated monthly cost: \$${estimated_monthly_cost}"
+          echo "Allowed estimated monthly cost: \$${COST_THRESHOLD_USD}"
 
-          awk -v diff="${total_diff}" -v threshold="${COST_THRESHOLD_USD}" '
+          awk -v cost="${estimated_monthly_cost}" -v threshold="${COST_THRESHOLD_USD}" '
             BEGIN {
-              if (diff > threshold) {
-                printf "Cost guardrail failed: monthly increase %.2f exceeds threshold %.2f\n", diff, threshold
+              if (cost > threshold) {
+                printf "Cost guardrail failed: estimated monthly cost %.2f exceeds threshold %.2f\n", cost, threshold
                 exit 1
               }
 
-              printf "Cost guardrail passed: monthly increase %.2f is within threshold %.2f\n", diff, threshold
+              printf "Cost guardrail passed: estimated monthly cost %.2f is within threshold %.2f\n", cost, threshold
             }
           '
